@@ -1,0 +1,32 @@
+{
+    "words": ["clit", "cock", "orgasm", "breasts", "pussy", "tits"],
+    "phrases": ["My control slips—no, it’s Xaden’s control slipping as I moan beneath him, my hips riding his hand, my nails biting into his skin with a pain that borders on pleasure as I writhe. Gods, I need—no—he needs me. His hunger walks the line of starvation to know my touch, my taste, the feel of—"],
+    "sections": [
+        {
+        "start": "His body goes rigid for one beat, two, and then he spins us impossibly fast,",
+        "end": "Immediately, I lose interest in everything but the muscled lines of his back and the navy-blue relic Sgaeyl transferred to him.",
+        "replacement": "<strong>[Xaden and Violet have sex, and in the heat of the moment, break the throwing target, desk, and armoire—and even set the curtains on fire.]</strong>"
+        },
+        {
+        "start": "and pretend that I’m not remembering",
+        "end": "inside me.” Warm and hard.",
+        "replacement": ".\"<strong>[removed content]</strong>"
+        },
+        {
+        "start": "the feel of your soft thighs around my",
+        "end": "you make right before you come",
+        "replacement": "[removed content]"
+        },
+        {
+        "start": "And I’ll ignore the memory of your hands biting",
+        "end": "physical limit to be exactly what you need",
+        "replacement": "[removed content]"
+        },
+        {
+        "start": "\"I fucking need you, Violet. Right now.",
+        "end": "enough regret in the voice that I believe it.",
+        "replacement": "[Violet and Xaden have sex again, ending when Garrick starts banging on the door.]"
+        }
+    ],
+    "replacements": []
+}

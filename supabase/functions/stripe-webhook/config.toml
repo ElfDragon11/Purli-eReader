@@ -1,0 +1,2 @@
+name = "stripe‑webhook"
+no_auth = true
