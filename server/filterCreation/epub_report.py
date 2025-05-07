@@ -26,7 +26,7 @@ MAX_CONCURRENT_CHAPTERS = 10 # Max chapters to process in parallel
 # IMPORTANT: Fetch GEMINI_API_KEY from environment variables in production!
 # Hardcoding is for testing ONLY. In Cloud Run, use the service's environment variables.
 # GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") # <--- Use this in production!
-GEMINI_API_KEY = "AIzaSyAyvm1rNE2cK2GBdA1K_8OFWMl1MCiQN10" # <-- Remove this line for production!
+GEMINI_API_KEY = "" # <-- Remove this line for production!
 
 
 genai_initialized = False # Flag to check if Gemini setup succeeded

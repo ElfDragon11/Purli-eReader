@@ -12,7 +12,7 @@ MODEL = "gemini-2.5-flash-preview-04-17" # Model name is the same
 EPUB_PATH = "Fourth-Wing.epub"
 
 # Use environment variable for API key - Recommended for security
-GEMINI_API_KEY = "AIzaSyAyvm1rNE2cK2GBdA1K_8OFWMl1MCiQN10"#os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = 
 
 # If you absolutely must, you can uncomment the line below and paste your key,
 # but using environment variables is safer, especially for production.

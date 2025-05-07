@@ -15,7 +15,7 @@ MODEL = "gemini-2.5-flash-preview-04-17"
 
 # --- Global/Initialization ---
 # These will run once per instance cold start
-GEMINI_API_KEY = "AIzaSyAyvm1rNE2cK2GBdA1K_8OFWMl1MCiQN10"
+GEMINI_API_KEY = ""
 genai_initialized = False # Flag to check if Gemini setup succeeded
 
 if not GEMINI_API_KEY:
