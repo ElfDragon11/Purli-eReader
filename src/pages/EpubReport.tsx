@@ -26,10 +26,6 @@ interface FilterResults {
   //flaggedSections: FlaggedSection[]; // List of flagged sections
 }
 
-interface ErrorResponse {
-  error: string;
-  details?: string;
-}
 // --- End Type Definitions ---
 
 const EpubReport: React.FC = () => {
@@ -42,7 +38,7 @@ const EpubReport: React.FC = () => {
   const [coverImage, setCoverImage] = useState<string | null>(null);
   const [progressPercent, setProgressPercent] = useState<number>(0); // New state for progress bar
   const [isPolling, setIsPolling] = useState<boolean>(false); // New state to manage polling status
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
 
   // Store interval ID and current job ID for polling
   const intervalIdRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -52,9 +48,12 @@ const EpubReport: React.FC = () => {
   const processEpub = async (file: File) => {
       setProcessing(true);
       setResults(null); 
-      setError(null);   
+      setError(null);
       setProgressText(`Uploading and Analyzing "${file.name}"...`);
-      setProgressPercent(0); 
+      setProgressPercent(0);
+      if (coverImage) { // Revoke previous image if any
+        URL.revokeObjectURL(coverImage);
+      }
       setCoverImage(null);
 
       currentJobIdRef.current = crypto.randomUUID(); // Generate and store unique job ID
@@ -63,9 +62,9 @@ const EpubReport: React.FC = () => {
 
       try {
         const arrayBuffer = await file.arrayBuffer();
-        const cover = await extractCoverImage(file);
-        if (cover) {
-          setCoverImage(cover);
+        const coverBlob = await extractCover(file); // Renamed to coverBlob
+        if (coverBlob) {
+          setCoverImage(URL.createObjectURL(coverBlob)); // Convert Blob to object URL
         }
 
         const response = await fetch("https://epub-report-478949773026.us-central1.run.app/epub-report", {
@@ -162,6 +161,15 @@ const EpubReport: React.FC = () => {
     };
   }, [isPolling]); // Only depends on isPolling and the implicitly stable currentJobIdRef
 
+  React.useEffect(() => {
+    // Cleanup object URL when component unmounts or coverImage changes
+    return () => {
+      if (coverImage) {
+        URL.revokeObjectURL(coverImage);
+      }
+    };
+  }, [coverImage]);
+
 
   // Handle file selection - this now also triggers processing
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -186,7 +194,17 @@ const EpubReport: React.FC = () => {
       setResults(null);
       setError(null);
       setProgressText('');
+      if (coverImage) {
+        URL.revokeObjectURL(coverImage); // Revoke old object URL
+      }
       setCoverImage(null); // Reset the cover image
+      setProgressPercent(0); // Reset progress bar
+      setIsPolling(false); // Ensure polling is stopped
+      if (intervalIdRef.current) {
+        clearInterval(intervalIdRef.current); // Clear any existing polling interval
+        intervalIdRef.current = null;
+      }
+      currentJobIdRef.current = null; // Reset job ID
   };
 
 
