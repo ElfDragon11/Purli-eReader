@@ -19,16 +19,17 @@ class LibraryPage extends StatefulWidget {
 
     class Book {
       final String id;
-      final String title; 
-      final String filePath;
+      final String title;
+      final String filePath; // Store the file_path to generate signed URL later
       final String author;
       final String? coverPath;
-      Book({required this.id, 
-            required this.title, 
-            required this.filePath,
-            required this.author, required this.coverPath});
+      String? signedCoverUrl; // Add a field for the signed cover URL
+      Book({required this.id,
+            required this.title,
+            required this.filePath, // filePath is now required
+            required this.author, this.coverPath, this.signedCoverUrl});
     }
-
+    
     class _LibraryPageState extends State<LibraryPage> {
   List<Book> _books = [];
 
@@ -62,24 +63,38 @@ class LibraryPage extends StatefulWidget {
          return; // Return early if user is not authenticated
       }
 
-      final response = await supabase.from('books').select('id, title, file_path, author, cover_path').eq('user_id', userId);
-      
+      final response = await supabase
+          .from('books')
+          .select('id, title, file_path, author, cover_path') // Select file_path as well
+          .eq('user_id', userId)
+          .order('created_at', {ascending: false});
+
       // Initialize fetchedBooks as a new list for this fetch operation
       List<Book> fetchedBooks = [];
       for (var item in response) {
-        fetchedBooks.add(Book(id: item['id'], 
-                                title: item['title'], 
-                                filePath: item['file_path'], 
-                                author: item['author'], 
-                                coverPath: item['cover_path']));
-      }
+        final book = Book(
+          id: item['id'],
+          title: item['title'],
+          filePath: item['file_path'], // Store file_path
+          author: item['author'],
+          coverPath: item['cover_path'],
+        );
 
-      // Ensure widget is mounted before calling setState
-      if (!mounted) return;
-     setState(() {
-        _books = fetchedBooks;
-      });
-    
+        // Generate signed URL for cover image
+        if (book.coverPath != null && book.coverPath!.isNotEmpty) {
+          try {
+            final signedUrlResponse = await supabase.storage
+                .from('books')
+                .createSignedUrl(book.coverPath!, 60 * 60); // 1 hour expiration
+
+            book.signedCoverUrl = signedUrlResponse;
+          } catch (e) {
+            print('Error generating signed URL for cover: ${book.coverPath} - $e');
+            // Continue without a cover image if signed URL generation fails
+          }
+        }
+        fetchedBooks.add(book);
+      }
     } on PostgrestException catch (error){
          // Ensure widget is mounted before showing SnackBar or calling setState
         if (!mounted) return;
@@ -318,6 +333,10 @@ class LibraryPage extends StatefulWidget {
       setState(() {
         _isLoading = false;
       });
+           if (!mounted) return;
+     setState(() {
+        _books = fetchedBooks;
+      });
     }
   }
 
@@ -366,9 +385,8 @@ class LibraryPage extends StatefulWidget {
                   itemCount: _books.length,
                   itemBuilder: (context, index) {                     
                     final book = _books[index]; 
-                    // Construct full URL for cover image, handle null or empty coverPath
-                    // Use 'books' bucket
-                    final String? fullCoverUrl = book.coverPath != null && book.coverPath!.isNotEmpty
+                    // Use the pre-generated signedCoverUrl
+                    final String? fullCoverUrl = book.signedCoverUrl;
                         ? supabase.storage.from('books').getPublicUrl(book.coverPath!)
                         : null;
                     
@@ -393,22 +411,40 @@ class LibraryPage extends StatefulWidget {
                             _showDeleteConfirmationDialog(book.id); // Pass book.id
                           },
                         ),
-                        onTap: () {
+                        onTap: () async { // Made onTap async
                           // Navigate to the Reader page and pass the book details
                           if (!mounted) return;
-                          
-                          print('Navigating to ReaderPage with bookId: ${book.id}, title: ${book.title}, filePath: ${book.filePath}'); // Added this line
 
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => ReaderPage(
-                                bookId: book.id, // Pass bookId
-                                bookTitle: book.title,
-                                filePath: book.filePath,
+                          // Generate signed URL for the book file before navigating
+                          String? signedBookUrl;
+                          try {
+                            signedBookUrl = await supabase.storage
+                                .from('books')
+                                .createSignedUrl(book.filePath, 60 * 60); // 1 hour expiration
+                          } catch (e) {
+                            print('Error generating signed URL for book file: ${book.filePath} - $e');
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to load book')));
+                            return; // Stop if signed URL cannot be generated
+                          }
+
+                          if (signedBookUrl != null && signedBookUrl.isNotEmpty) {
+                            print('Navigating to ReaderPage with bookId: ${book.id}, title: ${book.title}, signedBookUrl: $signedBookUrl');
+
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => ReaderPage(
+                                  bookId: book.id,
+                                  bookTitle: book.title,
+                                  filePath: signedBookUrl, // Pass the signed URL
+                                ),
                               ),
-                            ),
-                          );
+                            );
+                          } else {
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to generate signed URL for book')));
+                          }
                         },
                       ),
                     );
