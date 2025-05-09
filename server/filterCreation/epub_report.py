@@ -13,6 +13,7 @@ import random # Added for jitter in retries
 from concurrent.futures import ThreadPoolExecutor, as_completed # Added for parallel processing
 import firebase_admin # Added for Firestore
 from firebase_admin import credentials, firestore # Added for Firestore
+from supabase import create_client, Client # Added for Supabase
 
 # === CONFIGURATION ===
 MODEL = "gemini-2.5-flash-preview-04-17"
@@ -25,15 +26,18 @@ MAX_CONCURRENT_CHAPTERS = 10 # Max chapters to process in parallel
 # These will run once per instance cold start
 # IMPORTANT: Fetch GEMINI_API_KEY from environment variables in production!
 # Hardcoding is for testing ONLY. In Cloud Run, use the service's environment variables.
-# GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") # <--- Use this in production!
-GEMINI_API_KEY = "" # <-- Remove this line for production!
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") # <--- Use this in production!
+# GEMINI_API_KEY = "" # <-- Remove this line for production!
 
 
 genai_initialized = False # Flag to check if Gemini setup succeeded
 
 if not GEMINI_API_KEY:
-    print("FATAL: GEMINI_API_KEY environment variable not set.")
-    # The service will likely fail to start or requests will return 500
+    print("FATAL: GEMINI_API_KEY environment variable not set. The service will not be able to process requests requiring Gemini.")
+    # genai_initialized remains False, and functions relying on it should handle this.
+    # For Cloud Run, if Gemini is essential for the service to operate at all,
+    # you might consider raising an error to make the startup failure explicit:
+    # raise RuntimeError("FATAL: GEMINI_API_KEY environment variable not set.")
 else:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
@@ -45,16 +49,45 @@ else:
         print("Please ensure the model name is correct and your API key is valid.")
         # genai_initialized remains False
 
-# Initialize Firebase Admin SDK
-if not firebase_admin._apps:
-    try:
-        firebase_admin.initialize_app()
-        print("Firebase Admin SDK initialized successfully for epub_report.")
-    except Exception as e:
-        print(f"Error initializing Firebase Admin SDK for epub_report: {e}")
-        # If Firebase doesn't initialize, status updates won't work.
+# Initialize Firebase Admin SDK and Firestore client
+db = None # Initialize db to None
+firebase_initialized = False # Flag to check Firebase setup
 
-db = firestore.client() # Get a Firestore client
+# Initialize Supabase Client
+supabase_url: str = os.environ.get("SUPABASE_URL")
+supabase_key: str = os.environ.get("SUPABASE_SERVICE_KEY")
+supabase: Client | None = None
+supabase_initialized = False
+
+if supabase_url and supabase_key:
+    try:
+        supabase = create_client(supabase_url, supabase_key)
+        supabase_initialized = True
+        print("Supabase client initialized successfully.")
+    except Exception as e:
+        print(f"FATAL: Error initializing Supabase client: {e}. Supabase reporting will be disabled.")
+else:
+    print("FATAL: SUPABASE_URL and/or SUPABASE_SERVICE_KEY environment variables not set. Supabase reporting will be disabled.")
+
+try:
+    # Ensure an app is initialized.
+    # In Cloud Run, initialize_app() without args uses the service's identity.
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app()
+        print("Firebase Admin SDK initialized by this instance.")
+    else:
+        print("Firebase Admin SDK was already initialized.")
+
+    # Attempt to get the Firestore client.
+    db = firestore.client()
+    print("Firestore client obtained successfully for epub_report.")
+    firebase_initialized = True # Set flag only if client is obtained
+
+except Exception as e:
+    print(f"FATAL: Error during Firebase Admin SDK initialization or Firestore client retrieval: {e}")
+    print("Firestore functionality will be unavailable. Check service account permissions and Firebase setup.")
+    # db remains None, firebase_initialized remains False.
+    # The application will continue to run, but Firestore-dependent operations will be affected.
 
 # === EPUB Extraction Function ===
 # Keep your existing extract_epub_chapters function
@@ -175,6 +208,7 @@ def send_chapter_to_gemini(chapter_text: str, chapter_file_name: str = "Unknown 
             response = model.generate_content(
                 messages,
                 generation_config={"temperature": 0.3},
+                request_options={'timeout': 60} # Added 60-second timeout
             )
             if not response.candidates:
                 print(f"{log_prefix}  → Gemini returned no candidates for chapter {chapter_file_name}.")
@@ -226,28 +260,50 @@ def send_chapter_to_gemini(chapter_text: str, chapter_file_name: str = "Unknown 
 
 
 # === Run the full processing from file bytes ===
-# Create a new function to handle processing from bytes (like an upload)
+# Modify process_epub_from_bytes to access the global request for headers
 def process_epub_from_bytes(epub_bytes: bytes, job_id: str = None) -> Dict:
     """Processes EPUB content received as bytes and returns results."""
+    global current_request # Access the global request object
     log_prefix = f"[Job {job_id}] " if job_id else ""
     firestore_status_ref = None
-    if job_id and firebase_admin._apps: # Check if SDK is initialized
-        firestore_status_ref = db.collection('epub_process_status').document(job_id)
+    user_id_for_supabase = current_request.headers.get('X-User-ID') if current_request else None
+    file_name_for_supabase = current_request.headers.get('X-File-Name') if current_request else None
+
+    # --- Function to save report to Supabase ---
+    def save_report_to_supabase(report_data):
+        if not supabase_initialized or not supabase:
+            print(f"{log_prefix}Supabase not initialized. Skipping report save.")
+            return
         try:
-            firestore_status_ref.set({
-                'job_id': job_id,
-                'status': 'initializing',
-                'progress': 0,
-                'current_step': 'Initializing and saving EPUB file.',
-                'last_updated': firestore.SERVER_TIMESTAMP
-            })
-        except Exception as e_fs_init:
-            print(f"{log_prefix}Error writing initial status to Firestore: {e_fs_init}")
-            # Continue processing, but status updates might not work
+            data, error = supabase.table('reports').insert(report_data).execute()
+            if error:
+                print(f"{log_prefix}Error saving report to Supabase: {error}")
+            else:
+                print(f"{log_prefix}Report successfully saved to Supabase: {data}")
+        except Exception as e_supa:
+            print(f"{log_prefix}Exception while saving report to Supabase: {e_supa}")
+    # ---
+
+    if job_id: # Only proceed if there's a job_id
+        if firebase_initialized and db: # Check both the flag and that db is not None
+            try:
+                firestore_status_ref = db.collection('epub_process_status').document(job_id)
+                firestore_status_ref.set({
+                    'job_id': job_id,
+                    'status': 'initializing',
+                    'progress': 0,
+                    'current_step': 'Initializing and saving EPUB file.',
+                    'last_updated': firestore.SERVER_TIMESTAMP
+                })
+            except Exception as e_fs_init:
+                print(f"{log_prefix}Error writing initial status to Firestore: {e_fs_init}")
+                firestore_status_ref = None # Ensure it's None if setup failed
+        else:
+            print(f"{log_prefix}Firebase not initialized or DB client not available. Firestore status updates for job {job_id} will be skipped.")
 
     if not genai_initialized:
         print(f"{log_prefix}Gemini API not initialized, cannot process book.")
-        if firestore_status_ref:
+        if firestore_status_ref: # Check if ref was obtained
             try:
                 firestore_status_ref.update({
                     'status': 'error',
@@ -257,11 +313,21 @@ def process_epub_from_bytes(epub_bytes: bytes, job_id: str = None) -> Dict:
                 })
             except Exception as e_fs_err:
                 print(f"{log_prefix}Error writing Gemini init error status to Firestore: {e_fs_err}")
+        
+        # Save error report to Supabase
+        save_report_to_supabase({
+            "job_id": job_id,
+            "user_id": user_id_for_supabase,
+            "file_name": file_name_for_supabase,
+            "processing_status": "error_gemini_init",
+            "error_message": "Gemini API not initialized.",
+            "gemini_model_used": MODEL
+        })
         return {"error": "Gemini API not initialized", "job_id": job_id}
 
     if not epub_bytes:
         print(f"{log_prefix}Error: Received empty EPUB bytes.")
-        if firestore_status_ref:
+        if firestore_status_ref: # Check if ref was obtained
             try:
                 firestore_status_ref.update({
                     'status': 'error',
@@ -271,6 +337,14 @@ def process_epub_from_bytes(epub_bytes: bytes, job_id: str = None) -> Dict:
                 })
             except Exception as e_fs_err:
                 print(f"{log_prefix}Error writing empty file error status to Firestore: {e_fs_err}")
+        save_report_to_supabase({
+            "job_id": job_id,
+            "user_id": user_id_for_supabase,
+            "file_name": file_name_for_supabase,
+            "processing_status": "error_empty_file",
+            "error_message": "Received empty file data.",
+            "gemini_model_used": MODEL
+        })
         return {"error": "Received empty file data.", "job_id": job_id}
 
     temp_epub_filename = f"uploaded_book_{uuid.uuid4()}.epub"
@@ -281,14 +355,18 @@ def process_epub_from_bytes(epub_bytes: bytes, job_id: str = None) -> Dict:
         with open(temp_epub_path, "wb") as f:
             f.write(epub_bytes)
         print(f"{log_prefix}Successfully saved EPUB to {temp_epub_path}")
-        if firestore_status_ref:
-            firestore_status_ref.update({
-                'current_step': 'EPUB file saved, starting extraction.',
-                'last_updated': firestore.SERVER_TIMESTAMP
-            })
+        if firestore_status_ref: # Check if ref was obtained
+            try:
+                firestore_status_ref.update({
+                    'current_step': 'EPUB file saved, starting extraction.',
+                    'last_updated': firestore.SERVER_TIMESTAMP
+                })
+            except Exception as e:
+                print(f"{log_prefix}Error updating Firestore status after EPUB save: {e}")
+                # Continue processing, but status update might fail
     except Exception as e:
         print(f"{log_prefix}Error saving temporary file {temp_epub_path}: {e}")
-        if firestore_status_ref:
+        if firestore_status_ref: # Check if ref was obtained
             try:
                 firestore_status_ref.update({
                     'status': 'error',
@@ -298,19 +376,27 @@ def process_epub_from_bytes(epub_bytes: bytes, job_id: str = None) -> Dict:
                 })
             except Exception as e_fs_err:
                 print(f"{log_prefix}Error writing file save error status to Firestore: {e_fs_err}")
+        save_report_to_supabase({
+            "job_id": job_id,
+            "user_id": user_id_for_supabase,
+            "file_name": file_name_for_supabase,
+            "processing_status": "error_file_save",
+            "error_message": f'Failed to save temporary EPUB file: {str(e)}',
+            "gemini_model_used": MODEL
+        })
         return {"error": f"Failed to save temporary EPUB file: {e}", "job_id": job_id}
 
     chapters_data = []
     total_chapters_for_firestore = 0
     try:
-        if firestore_status_ref:
+        if firestore_status_ref: # Check if ref was obtained
             firestore_status_ref.update({
                 'current_step': 'Extracting chapters from EPUB...',
                 'last_updated': firestore.SERVER_TIMESTAMP
             })
         chapters_data = extract_epub_chapters(temp_epub_path)
         total_chapters_for_firestore = len(chapters_data)
-        if firestore_status_ref:
+        if firestore_status_ref: # Check if ref was obtained
             firestore_status_ref.update({
                 'total_chapters': total_chapters_for_firestore,
                 'current_step': f'Extracted {total_chapters_for_firestore} chapters. Preparing for analysis.',
@@ -319,18 +405,26 @@ def process_epub_from_bytes(epub_bytes: bytes, job_id: str = None) -> Dict:
 
         if not chapters_data:
             print(f"{log_prefix}No chapters to process after extraction.")
-            if firestore_status_ref:
+            if firestore_status_ref: # Check if ref was obtained
                 try:
                     firestore_status_ref.update({
                         'status': 'completed', # Or 'warning' if you prefer
                         'message': 'No suitable chapters found in the EPUB.',
-                        'progress': 100, # No processing needed, so 100% of 'nothing'
-                        'chapters_processed': 0,
-                        'total_chapters': 0,
-                        'last_updated': firestore.SERVER_TIMESTAMP
+                        'progress': 100 # No processing needed, so 100% of 'nothing'
                     })
                 except Exception as e_fs_err:
                     print(f"{log_prefix}Error writing no chapters status to Firestore: {e_fs_err}")
+            
+            # Save report to Supabase (no chapters found)
+            save_report_to_supabase({
+                "job_id": job_id,
+                "user_id": user_id_for_supabase,
+                "file_name": file_name_for_supabase,
+                "total_book_chapters": 0,
+                "processing_status": "completed_no_chapters",
+                "error_message": "No suitable chapters found in the EPUB.",
+                "gemini_model_used": MODEL
+            })
             return {
                 "job_id": job_id,
                 "words": [],
@@ -353,7 +447,7 @@ def process_epub_from_bytes(epub_bytes: bytes, job_id: str = None) -> Dict:
         SWEAR_WORDS = {'damn', 'damned', 'damning', 'hell', 'fuck', 'fucking', 'fucked', 'fucks', 'shit', 'shitting', 'shitted', 'shits', 'ass', 'asses', 'asshole', 'bitch', 'cock', 'penus', 'motherfuck', 'motherfucker', 'motherfucking', 'motherfuckers'}
 
         print(f"{log_prefix}Starting parallel processing of {total_chapters_for_firestore} chapters with up to {MAX_CONCURRENT_CHAPTERS} workers.")
-        if firestore_status_ref:
+        if firestore_status_ref: # Check if ref was obtained
             firestore_status_ref.update({
                 'current_step': f'Starting analysis of {total_chapters_for_firestore} chapters.',
                 'progress': 5, # Small progress for starting analysis phase
@@ -371,17 +465,22 @@ def process_epub_from_bytes(epub_bytes: bytes, job_id: str = None) -> Dict:
                 chapter_file_name = original_chapter_info.get('file', f'Chapter_{chapter_index}')
                 chapter_text = original_chapter_info["text"]
                 
+                book_total_char_count += len(chapter_text) # Added this line to accumulate total characters
+
                 chapters_processed_count += 1
                 print(f"{log_prefix}Completed processing for chapter {chapters_processed_count}/{total_chapters_for_firestore} ({chapter_file_name}).")
                 
-                if firestore_status_ref:
+                if firestore_status_ref: # Check if ref was obtained
                     progress_percent = int((chapters_processed_count / total_chapters_for_firestore) * 100) if total_chapters_for_firestore > 0 else 0
-                    firestore_status_ref.update({
-                        'chapters_processed': chapters_processed_count,
-                        'progress': progress_percent,
-                        'current_step': f'Analyzing chapter {chapters_processed_count}/{total_chapters_for_firestore}: {chapter_file_name}',
-                        'last_updated': firestore.SERVER_TIMESTAMP
-                    })
+                    try: # Add try-except for individual update
+                        firestore_status_ref.update({
+                            'chapters_processed': chapters_processed_count,
+                            'progress': progress_percent,
+                            'current_step': f'Analysis in progress: {chapters_processed_count} of {total_chapters_for_firestore} chapters analyzed.', # Changed this line
+                            'last_updated': firestore.SERVER_TIMESTAMP
+                        })
+                    except Exception as e_fs_progress:
+                        print(f"{log_prefix}Error updating Firestore progress for chapter {chapter_file_name}: {e_fs_progress}")
 
                 # Count swear words in the current chapter
                 current_chapter_swear_counts = {}
@@ -426,7 +525,7 @@ def process_epub_from_bytes(epub_bytes: bytes, job_id: str = None) -> Dict:
             "swearWordsCount": total_swear_word_instances, 
             "message": "EPUB processing completed."
         }
-        if firestore_status_ref:
+        if firestore_status_ref: # Check if ref was obtained
             try:
                 firestore_status_ref.update({
                     'status': 'completed',
@@ -441,11 +540,30 @@ def process_epub_from_bytes(epub_bytes: bytes, job_id: str = None) -> Dict:
                 })
             except Exception as e_fs_complete:
                 print(f"{log_prefix}Error writing completion status to Firestore: {e_fs_complete}")
+        
+        # Save successful report to Supabase
+        report_to_save = {
+            "job_id": job_id,
+            "user_id": user_id_for_supabase,
+            "file_name": file_name_for_supabase,
+            "total_book_characters": book_total_char_count,
+            "total_book_chapters": chapters_processed_count,
+            "total_filtered_characters": book_flagged_content_char_count,
+            "percentage_filtered": book_percent_filtered,
+            "affected_chapter_count": book_flagged_chapter_count,
+            "affected_chapter_names": json.dumps(book_flagged_chapter_titles), # Ensure JSONB compatibility
+            "total_swear_word_instances": total_swear_word_instances,
+            "swear_word_map": json.dumps(book_swear_word_count_map), # Ensure JSONB compatibility
+            "all_flagged_sections": json.dumps(all_flagged_sections), # Ensure JSONB compatibility
+            "processing_status": "completed",
+            "gemini_model_used": MODEL
+        }
+        save_report_to_supabase(report_to_save)
         return final_result_payload
 
     except Exception as e_main_proc:
         print(f"{log_prefix}An error occurred during main EPUB processing: {e_main_proc}")
-        if firestore_status_ref:
+        if firestore_status_ref: # Check if ref was obtained
             try:
                 firestore_status_ref.update({
                     'status': 'error',
@@ -454,6 +572,16 @@ def process_epub_from_bytes(epub_bytes: bytes, job_id: str = None) -> Dict:
                 })
             except Exception as e_fs_err_main:
                 print(f"{log_prefix}Error writing main processing error to Firestore: {e_fs_err_main}")
+        
+        # Save error report to Supabase
+        save_report_to_supabase({
+            "job_id": job_id,
+            "user_id": user_id_for_supabase,
+            "file_name": file_name_for_supabase,
+            "processing_status": "error_processing",
+            "error_message": f'An error occurred during EPUB processing: {str(e_main_proc)}',
+            "gemini_model_used": MODEL
+        })
         return {"error": f"An error occurred during EPUB processing: {str(e_main_proc)}", "job_id": job_id}
     finally:
         if os.path.exists(temp_epub_path):
@@ -467,84 +595,94 @@ def process_epub_from_bytes(epub_bytes: bytes, job_id: str = None) -> Dict:
 @functions_framework.http
 def epub_report(request):
     """HTTP Cloud Function to filter EPUB content using Gemini."""
-    from flask import make_response, jsonify
+    # Make request available globally within this function's scope for Supabase helper
+    # This is a simplification. In a class-based structure, request could be passed differently.
+    global current_request 
+    current_request = request
 
-    job_id = request.headers.get('X-Job-ID') # Get job_id from header
-    if not job_id:
-        job_id = str(uuid.uuid4()) # Generate a job_id if not provided
-        print(f"No X-Job-ID header found. Generated Job ID: {job_id}")
-    else:
-        print(f"Received request with X-Job-ID: {job_id}")
+    try:
+        from flask import make_response, jsonify
 
-    log_prefix = f"[Job {job_id}] " if job_id else ""
+        job_id = request.headers.get('X-Job-ID') # Get job_id from header
+        if not job_id:
+            job_id = str(uuid.uuid4()) # Generate a job_id if not provided
+            print(f"No X-Job-ID header found. Generated Job ID: {job_id}")
+        else:
+            print(f"Received request with X-Job-ID: {job_id}")
 
-    # Ensure Gemini API is initialized
-    if not genai_initialized:
-        print(f"{log_prefix}Received request, but Gemini API initialization failed.")
-        response_data = {"error": "Service backend initialization failed.", "job_id": job_id}
-        response = make_response(jsonify(response_data))
-        response.status_code = 500
-        response.headers.set('Access-Control-Allow-Origin', '*')
-        return response
+        log_prefix = f"[Job {job_id}] " if job_id else ""
 
-    # Handle CORS preflight request (OPTIONS method)
-    if request.method == 'OPTIONS':
-        print(f"{log_prefix}Handling CORS preflight request.")
-        response = make_response()
-        response.headers.set('Access-Control-Allow-Origin', '*')
-        response.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        response.headers.set('Access-Control-Allow-Headers', 'Content-Type, X-Job-ID') # Allow X-Job-ID
-        response.headers.set('Access-Control-Max-Age', '3600')
-        return response
-
-    # Handle POST request - expecting file data
-    if request.method == 'POST':
-        print(f"{log_prefix}Received POST request.")
-        try:
-            # Get the raw binary data from the request body
-            # This assumes the client sends the ArrayBuffer directly as the request body
-            epub_data = request.data # type: bytes
-
-            if not epub_data:
-                print(f"{log_prefix}Error: No file data received in request body.")
-                response_data = {"error": "No EPUB file data received. Please upload the file directly.", "job_id": job_id}
-                response = make_response(jsonify(response_data))
-                response.status_code = 400
-                response.headers.set('Access-Control-Allow-Origin', '*')
-                return response
-
-            print(f"{log_prefix}Received {len(epub_data)} bytes of EPUB data.")
-            
-            # Start processing and pass job_id
-            print(f"{log_prefix}Starting EPUB processing.")
-            result = process_epub_from_bytes(epub_data, job_id)
-            result["job_id"] = job_id # Ensure job_id is in the final response
-
-            if "error" in result:
-                print(f"{log_prefix}Error during processing: {result['error']}")
-                response = make_response(jsonify(result))
-                response.status_code = 500 # Or appropriate error code based on result['error']
-                response.headers.set('Access-Control-Allow-Origin', '*')
-                return response
-
-            response = make_response(jsonify(result))
-            response.headers.set('Content-Type', 'application/json')
-            response.headers.set('Access-Control-Allow-Origin', '*')
-            print(f"{log_prefix}Request processed successfully.")
-            return response
-
-        except Exception as e:
-            print(f"{log_prefix}An unhandled error occurred during request processing: {e}")
-            response_data = {"error": f"Internal Server Error: {e}", "job_id": job_id}
+        # Ensure Gemini API is initialized
+        if not genai_initialized:
+            print(f"{log_prefix}Received request, but Gemini API initialization failed.")
+            response_data = {"error": "Service backend initialization failed.", "job_id": job_id}
             response = make_response(jsonify(response_data))
             response.status_code = 500
             response.headers.set('Access-Control-Allow-Origin', '*')
             return response
-    else:
-        print(f"{log_prefix}Received unsupported method: {request.method}")
-        response_data = {"error": f"Method {request.method} not allowed", "job_id": job_id}
-        response = make_response(jsonify(response_data))
-        response.status_code = 405
-        response.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        response.headers.set('Access-Control-Allow-Origin', '*')
-        return response
+
+        # Handle CORS preflight request (OPTIONS method)
+        if request.method == 'OPTIONS':
+            print(f"{log_prefix}Handling CORS preflight request.")
+            response = make_response()
+            response.headers.set('Access-Control-Allow-Origin', '*')
+            response.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS')
+            # Add X-User-ID and X-File-Name to allowed headers
+            response.headers.set('Access-Control-Allow-Headers', 'Content-Type, X-Job-ID, X-User-ID, X-File-Name') 
+            response.headers.set('Access-Control-Max-Age', '3600')
+            return response
+
+        # Handle POST request - expecting file data
+        if request.method == 'POST':
+            print(f"{log_prefix}Received POST request.")
+            try:
+                # Get the raw binary data from the request body
+                # This assumes the client sends the ArrayBuffer directly as the request body
+                epub_data = request.data # type: bytes
+
+                if not epub_data:
+                    print(f"{log_prefix}Error: No file data received in request body.")
+                    response_data = {"error": "No EPUB file data received. Please upload the file directly.", "job_id": job_id}
+                    response = make_response(jsonify(response_data))
+                    response.status_code = 400
+                    response.headers.set('Access-Control-Allow-Origin', '*')
+                    return response
+
+                print(f"{log_prefix}Received {len(epub_data)} bytes of EPUB data.")
+                
+                # Start processing and pass job_id
+                print(f"{log_prefix}Starting EPUB processing.")
+                result = process_epub_from_bytes(epub_data, job_id)
+                result["job_id"] = job_id # Ensure job_id is in the final response
+
+                if "error" in result:
+                    print(f"{log_prefix}Error during processing: {result['error']}")
+                    response = make_response(jsonify(result))
+                    response.status_code = 500 # Or appropriate error code based on result['error']
+                    response.headers.set('Access-Control-Allow-Origin', '*')
+                    return response
+
+                response = make_response(jsonify(result))
+                response.headers.set('Content-Type', 'application/json')
+                response.headers.set('Access-Control-Allow-Origin', '*')
+                print(f"{log_prefix}Request processed successfully.")
+                return response
+
+            except Exception as e:
+                print(f"{log_prefix}An unhandled error occurred during request processing: {e}")
+                response_data = {"error": f"Internal Server Error: {e}", "job_id": job_id}
+                response = make_response(jsonify(response_data))
+                response.status_code = 500
+                response.headers.set('Access-Control-Allow-Origin', '*')
+                return response
+        else:
+            print(f"{log_prefix}Received unsupported method: {request.method}")
+            response_data = {"error": f"Method {request.method} not allowed", "job_id": job_id}
+            response = make_response(jsonify(response_data))
+            response.status_code = 405
+            response.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS')
+            response.headers.set('Access-Control-Allow-Origin', '*')
+            return response
+    finally:
+        # Clean up global request object
+        current_request = None

@@ -36,13 +36,14 @@ const EpubReport: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [progressText, setProgressText] = useState<string>('');
   const [coverImage, setCoverImage] = useState<string | null>(null);
-  const [progressPercent, setProgressPercent] = useState<number>(0); // New state for progress bar
-  const [isPolling, setIsPolling] = useState<boolean>(false); // New state to manage polling status
+  const [progressPercent, setProgressPercent] = useState<number>(0);
+  const [isPolling, setIsPolling] = useState<boolean>(false);
   const { user } = useAuth();
 
   // Store interval ID and current job ID for polling
   const intervalIdRef = React.useRef<NodeJS.Timeout | null>(null);
-  const currentJobIdRef = React.useRef<string | null>(null); // Ref to store the current job ID
+  const currentJobIdRef = React.useRef<string | null>(null);
+  const initialPollAttemptsRef = React.useRef<number>(0); // Added to track initial poll attempts
 
   // New function to handle the processing logic
   const processEpub = async (file: File) => {
@@ -57,6 +58,7 @@ const EpubReport: React.FC = () => {
       setCoverImage(null);
 
       currentJobIdRef.current = crypto.randomUUID(); // Generate and store unique job ID
+      initialPollAttemptsRef.current = 0; // Reset for new job
       console.log("Client generated Job ID:", currentJobIdRef.current);
       setIsPolling(true); // Start polling AFTER setting the job ID
 
@@ -67,12 +69,20 @@ const EpubReport: React.FC = () => {
           setCoverImage(URL.createObjectURL(coverBlob)); // Convert Blob to object URL
         }
 
+        const headers: HeadersInit = {
+          'Content-Type': 'application/octet-stream',
+          'X-Job-ID': currentJobIdRef.current!,
+        };
+        if (user && user.id) { // Check if user and user.id exist
+          headers['X-User-ID'] = user.id;
+        }
+        if (file && file.name) { // Check if file and file.name exist
+            headers['X-File-Name'] = file.name;
+        }
+
         const response = await fetch("https://epub-report-478949773026.us-central1.run.app/epub-report", {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/octet-stream',
-            'X-Job-ID': currentJobIdRef.current, // Send the generated job ID
-          },
+          headers: headers, // Use the headers object
           body: arrayBuffer,
         });
 
@@ -100,18 +110,35 @@ const EpubReport: React.FC = () => {
   // Function to check processing status
   const checkProcessingStatus = async (jobId: string) => {
     if (!jobId) return;
+
     try {
-      // IMPORTANT: Replace with the URL of your NEW status check Cloud Function
-      const statusResponse = await fetch(`https://YOUR_STATUS_ENDPOINT_URL/get-epub-processing-status?job_id=${jobId}`);
+      // Ensure you are using the correct deployed URL for get_epub_status
+      const statusCheckUrl = `https://get-epub-status-478949773026.us-central1.run.app/get-epub-status?job_id=${jobId}`;
+      const statusResponse = await fetch(statusCheckUrl);
+
       if (!statusResponse.ok) {
-        console.warn(`Status check for job ${jobId} returned: ${statusResponse.status}`);
-        // Potentially stop polling if server indicates a permanent error for this job ID
-        if (statusResponse.status === 404) { // Example: Job ID not found, maybe stop polling
-            console.error(`Job ID ${jobId} not found on server. Stopping polling.`);
+        console.warn(`Status check for job ${jobId} returned: ${statusResponse.status} ${statusResponse.statusText}`);
+        if (statusResponse.status === 404) {
+            initialPollAttemptsRef.current += 1;
+            // Stop polling for 404 only if it's not one of the first few attempts (e.g., after 3-4 attempts)
+            // This gives the backend ~9-12 seconds for the initial document creation.
+            if (initialPollAttemptsRef.current > 3) { // Allow 3 retries (total 4 attempts including initial)
+                console.error(`Job ID ${jobId} still not found after ${initialPollAttemptsRef.current} attempts. Stopping polling.`);
+                setIsPolling(false);
+            } else {
+                console.warn(`Job ID ${jobId} not found (attempt ${initialPollAttemptsRef.current}), will retry...`);
+            }
+        } else {
+            // For other errors (e.g., 500), stop polling immediately.
+            console.error(`Status check for job ${jobId} failed with status ${statusResponse.status}. Stopping polling.`);
             setIsPolling(false);
         }
         return;
       }
+
+      // If response is OK, it means the document was found. Reset attempts counter for this job.
+      initialPollAttemptsRef.current = 0;
+
       const statusData = await statusResponse.json();
 
       if (statusData.progress !== undefined) {
@@ -127,16 +154,21 @@ const EpubReport: React.FC = () => {
             setProgressPercent(100);
             // If results are not yet set by the main fetch, you might set them here if statusData includes them
             // Or trust the main fetch to complete shortly.
-            setProgressText("Analysis complete according to status check.");
+            setProgressText(statusData.message || "Analysis complete according to status check.");
         }
         if (statusData.status === 'error' && !error) { // only set error if not already set by main fetch
-            setError(statusData.errorMessage || 'Processing failed according to status check.');
+            setError(statusData.error_message || statusData.message || 'Processing failed according to status check.');
             setProgressText("Analysis failed according to status check.");
         }
       }
     } catch (pollError) {
       console.error("Error polling for status:", pollError);
-      // Decide if polling should stop on certain types of errors
+      // Also count network errors or other fetch issues as an attempt
+      initialPollAttemptsRef.current += 1;
+      if (initialPollAttemptsRef.current > 3) {
+          console.error(`Polling failed multiple times for job ${jobId} due to network or other errors. Stopping polling.`);
+          setIsPolling(false);
+      }
     }
   };
 
@@ -249,12 +281,15 @@ const EpubReport: React.FC = () => {
                      <p>{progressText}</p>
                      {/* Progress Bar - always show if processing or polling was active and not yet fully reset */}
                      {(isPolling || progressPercent > 0) && (
-                        <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 my-2">
-                            <div 
-                                className="bg-blue-600 h-2.5 rounded-full transition-all duration-300 ease-out"
-                                style={{ width: `${progressPercent}%` }}
-                            ></div>
-                        </div>
+                        <>
+                            <p className="text-sm font-semibold text-blue-700">{progressPercent}%</p> {/* Added percentage display */}
+                            <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 my-1"> {/* Adjusted margin */}
+                                <div 
+                                    className="bg-blue-600 h-2.5 rounded-full transition-all duration-300 ease-out"
+                                    style={{ width: `${progressPercent}%` }}
+                                ></div>
+                            </div>
+                        </>
                      )}
                      {/* Show spinner only if polling is not active AND progress is 0 (initial upload phase) */}
                      {!isPolling && progressPercent === 0 && (

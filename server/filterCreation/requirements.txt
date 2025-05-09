@@ -1,0 +1,8 @@
+functions-framework
+google-cloud-firestore
+firebase-admin
+google-generativeai
+beautifulsoup4
+requests
+Flask
+supabase

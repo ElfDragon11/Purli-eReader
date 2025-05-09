@@ -21,4 +21,11 @@ class AuthState extends ChangeNotifier{
         }
         notifyListeners();
     }
+
+    void clearUser() {
+        _user = null;
+        _isEmailVerified = false;
+        _hasActiveSubscription = false;
+        notifyListeners();
+    }
 }

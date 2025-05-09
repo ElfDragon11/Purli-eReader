@@ -102,14 +102,6 @@ const Reader = () => {
       });
     }
 
-    // Finally handle replacements
-    if (contentFilters.replacements) {
-      contentFilters.replacements.forEach(({ original, replacement }) => {
-        const regex = new RegExp(`\\b${original}\\b`, 'gi');
-        filteredContent = filteredContent.replace(regex, replacement);
-      });
-    }
-
     return filteredContent;
   };
 

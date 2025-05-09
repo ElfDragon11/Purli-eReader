@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'auth_state.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' hide AuthState; // Hide Supabase's AuthState to resolve ambiguity
+import 'auth_state.dart'; // Ensure our AuthState is imported
 import 'package:url_launcher/url_launcher.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 
 class UserProfilePage extends StatefulWidget {
@@ -107,11 +106,14 @@ class _UserProfilePageState extends State<UserProfilePage> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _errorMessage.isNotEmpty
+                    // Corrected ternary operator for error display
                     ? Center(
-                      child: Text(
-                        'Error: $_errorMessage', style: const TextStyle(color: Colors.red),
-                      ),
-                    ? Text('Error: $_errorMessage', style: const TextStyle(color: Colors.red))
+                        child: Text(
+                          'Error: $_errorMessage',
+                          style: const TextStyle(color: Colors.red),
+                          textAlign: TextAlign.center,
+                        ),
+                      )
                     : SingleChildScrollView(
                       child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -157,16 +159,26 @@ class _UserProfilePageState extends State<UserProfilePage> {
                               onPressed: _launchSubscriptionUrl,
                               child: const Text('Manage Subscription'),
                             ),
-                           
-                           
-                            child: const Text('Sign Out'),
-                          ), onTap: () {
-                             final authState =
-                        Provider.of<AuthState>(context, listen: false);
-                    authState.signOut();
-                  }
-                          ),
-                        ],
+                            const SizedBox(height: 20.0), // Add some spacing
+                            // Correctly implemented Sign Out button
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.redAccent, // Example: different color for sign out
+                              ),
+                              onPressed: () {
+                                final authState = Provider.of<AuthState>(context, listen: false);
+                                authState.clearUser(); // Changed from signOut() to clearUser()
+                                // After signing out, you might want to navigate the user to the login screen
+                                // For example, if your authentication page is AuthPage:
+                                // Navigator.of(context).pushAndRemoveUntil(
+                                //   MaterialPageRoute(builder: (context) => AuthPage()), 
+                                //   (Route<dynamic> route) => false,
+                                // );
+                              },
+                              child: const Text('Sign Out'),
+                            ),
+                          ],
+                        ),
                       ),
           ),
         ));

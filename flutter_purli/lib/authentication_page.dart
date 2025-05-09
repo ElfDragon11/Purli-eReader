@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+// import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' hide AuthState; // Hide Supabase's AuthState
 import 'package:provider/provider.dart';
 import 'auth_state.dart';
 
@@ -19,7 +19,6 @@ class _AuthPageState extends State<AuthPage> {
   bool _isLogin = true;
   bool _agreeToTerms = false;
   bool _isLoading = false;
-  String? _errorMessage;
 
   final _formKey = GlobalKey<FormState>();
   final TextEditingController _emailController = TextEditingController();
@@ -39,8 +38,9 @@ class _AuthPageState extends State<AuthPage> {
 
   Future<void> _launchTermsUrl() async {
     const url = 'https://purli.co/terms';
-    if (await canLaunch(url)) {
-      await launch(url);
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
     } else {
       throw 'Could not launch $url';
     }
@@ -50,7 +50,6 @@ class _AuthPageState extends State<AuthPage> {
     if (_formKey.currentState!.validate()) {
       setState(() {
         _isLoading = true;
-        _errorMessage = null;
       });
 
       Future<void> authAction;
@@ -109,19 +108,27 @@ class _AuthPageState extends State<AuthPage> {
     if(mounted){
       final authState = Provider.of<AuthState>(context, listen: false);
       if (user != null) {
-        final userId = Supabase.instance.client.auth.currentUser?.id;
-        bool isEmailVerified = Supabase.instance.client.auth.currentUser?.emailConfirmedAt != null;
+        final userId = user.id; 
+        bool isEmailVerified = user.emailConfirmedAt != null; 
         bool hasActiveSubscription = false;
         try{
           final subscriptionResponse = await Supabase.instance.client.from('subscriptions').select().eq('user_id', userId).single();
-          hasActiveSubscription = subscriptionResponse['status'] == 'active';
-          
+          // Check if subscriptionResponse contains 'status' and it's 'active'
+          // The previous check 'subscriptionResponse != null' is redundant because .single() would throw if no record is found.
+          if (subscriptionResponse['status'] == 'active') {
+            hasActiveSubscription = true;
+          }
         }catch(e){
+          if (kDebugMode) {
+            print('Error fetching subscription: $e');
+          }
         }finally{
           authState.setUser(user, isEmailVerified: isEmailVerified, hasActiveSubscription: hasActiveSubscription);
-            });
-          }
-      });
+        } // Corrected: Removed extra '});' from here
+      } else {
+        // Optionally handle the case where user is null after auth attempt
+        authState.clearUser(); // Example: clear user from state
+      } // Corrected: Removed extra '});' from here
     }
   }
   void _showErrorSnackBar(String message) {
@@ -198,9 +205,10 @@ class _AuthPageState extends State<AuthPage> {
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                        ),
+                          ],
+                        ), // Closes Row
+                        // Removed extra parenthesis here: ), 
+                      ],
                       const SizedBox(height: 16),
                       _isLoading ? const Center(child: CircularProgressIndicator()) :ElevatedButton(onPressed: _submitForm, child: Text(_isLogin ? 'Login' : 'Sign Up')),
                     ],

@@ -1,5 +1,4 @@
-import { Book } from 'epubjs';
-import { FilterContent, Book as Booktype} from '../types/database';
+import { FilterContent } from '../types/database';
 import { supabase } from './supabase';
 import { PostgrestError } from '@supabase/supabase-js';
 
@@ -7,29 +6,24 @@ const DEFAULT_FILTER: FilterContent = {
   words: ['damn', 'damned', 'damning', 'hell', 'fuck', 'fucking', 'fucked', 'fucks', 'shit', 'shitting', 'shitted', 'shits', 'ass', 'asses', 'asshole', 'bitch', 'cock', 'penus', 'motherfuck', 'motherfucker', 'motherfucking', 'motherfuckers', ],
   phrases: [],
   sections: [],
-  replacements: []
 };
 
 const emptyFilter: FilterContent = {
   words: [],
   phrases: [],
   sections: [],
-  replacements: []
 };
 
 const mergeFilters = (defaultFilter: FilterContent, customFilter: FilterContent): FilterContent => {
   return {
     // Merge and deduplicate words
-    words: Array.from(new Set([...defaultFilter.words, ...(customFilter.words || [])])),
+    words: Array.from(new Set([...(defaultFilter.words || []), ...(customFilter.words || [])])),
     
     // Merge and deduplicate phrases
-    phrases: Array.from(new Set([...defaultFilter.phrases, ...(customFilter.phrases || [])])),
+    phrases: Array.from(new Set([...(defaultFilter.phrases || []), ...(customFilter.phrases || [])])),
     
     // Merge sections (no deduplication needed as they're unique by nature)
-    sections: [...defaultFilter.sections, ...(customFilter.sections || [])],
-    
-    // Merge replacements (keep all as they might have different replacements)
-    replacements: [...defaultFilter.replacements, ...(customFilter.replacements || [])]
+    sections: [...(defaultFilter.sections || []), ...(customFilter.sections || [])],
   };
 };
 
@@ -127,7 +121,6 @@ const isValidFilterContent = (content: any): content is FilterContent => {
     Array.isArray(content.words) &&
     Array.isArray(content.phrases) &&
     Array.isArray(content.sections) &&
-    Array.isArray(content.replacements) &&
     content.sections.every((section: any) =>
       typeof section.start === 'string' &&
       typeof section.end === 'string' &&

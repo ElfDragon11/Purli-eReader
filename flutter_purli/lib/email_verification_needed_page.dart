@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 class EmailVerificationNeededPage extends StatelessWidget {
   const EmailVerificationNeededPage({Key? key}) : super(key: key);
@@ -27,12 +26,22 @@ class EmailVerificationNeededPage extends StatelessWidget {
                 ElevatedButton(
                   onPressed: () async {
                      try {
-                      await Supabase.instance.client.auth.resend();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Verification email resent. Check your inbox!'),
-                        ),
-                      );
+                      // Added email for resend function
+                      final email = Supabase.instance.client.auth.currentUser?.email;
+                      if (email != null) {
+                        await Supabase.instance.client.auth.resend(type: OtpType.signup, email: email);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Verification email resent. Check your inbox!'),
+                          ),
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Could not resend email. User email not found.'),
+                          ),
+                        );
+                      }
                     } catch (e) {
                        ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(

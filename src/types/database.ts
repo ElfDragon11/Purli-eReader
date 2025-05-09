@@ -18,10 +18,6 @@ export interface FilterContent {
     start: string;
     replacement: string | null;
   }[];
-  replacements?: {
-    original: string;
-    replacement: string;
-  }[];
 }
 
 export interface BookPosition {

@@ -88,11 +88,16 @@ const Library = () => {
         if (signErr || !signed?.signedUrl) throw signErr;
 
         // ─────── 3) Call Cloud-Run filter service ───────
+        const headers: HeadersInit = { "Content-Type": "application/json" };
+        if (user && user.id) {
+          headers['X-User-ID'] = user.id;
+        }
+
         const res = await fetch(
           "https://generate-filter-gemini-478949773026.us-central1.run.app/filter_epub_handler",
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: headers, // Use the updated headers object
             body: JSON.stringify({ epub_url: signed.signedUrl }),
           }
         );
