@@ -43,6 +43,7 @@ class AppState extends State<App> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initDeepLinks();
+    _handleAppResume(); // Call this on initial app start as well
   }
   
   @override

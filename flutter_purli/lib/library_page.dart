@@ -67,7 +67,7 @@ class LibraryPage extends StatefulWidget {
           .from('books')
           .select('id, title, file_path, author, cover_path') // Select file_path as well
           .eq('user_id', userId)
-          .order('created_at', {ascending: false});
+          .order('created_at', ascending: false); // Corrected: named parameter
 
       // Initialize fetchedBooks as a new list for this fetch operation
       List<Book> fetchedBooks = [];
@@ -94,6 +94,12 @@ class LibraryPage extends StatefulWidget {
           }
         }
         fetchedBooks.add(book);
+      }
+      // Ensure widget is mounted before calling setState
+      if (mounted) {
+        setState(() {
+          _books = fetchedBooks;
+        });
       }
     } on PostgrestException catch (error){
          // Ensure widget is mounted before showing SnackBar or calling setState
@@ -333,10 +339,10 @@ class LibraryPage extends StatefulWidget {
       setState(() {
         _isLoading = false;
       });
-           if (!mounted) return;
-     setState(() {
-        _books = fetchedBooks;
-      });
+           // if (!mounted) return; // This block was causing an error, fetchedBooks is not in scope.
+     // setState(() {
+        // _books = fetchedBooks; 
+      // });
     }
   }
 
@@ -386,9 +392,7 @@ class LibraryPage extends StatefulWidget {
                   itemBuilder: (context, index) {                     
                     final book = _books[index]; 
                     // Use the pre-generated signedCoverUrl
-                    final String? fullCoverUrl = book.signedCoverUrl;
-                        ? supabase.storage.from('books').getPublicUrl(book.coverPath!)
-                        : null;
+                    final String? fullCoverUrl = book.signedCoverUrl; // Corrected: Use the already fetched signedCoverUrl
                     
                     print('Attempting to load cover from URL: $fullCoverUrl');
 
@@ -428,7 +432,7 @@ class LibraryPage extends StatefulWidget {
                             return; // Stop if signed URL cannot be generated
                           }
 
-                          if (signedBookUrl != null && signedBookUrl.isNotEmpty) {
+                          if (signedBookUrl.isNotEmpty) { // Corrected: removed redundant null check
                             print('Navigating to ReaderPage with bookId: ${book.id}, title: ${book.title}, signedBookUrl: $signedBookUrl');
 
                             Navigator.push(
@@ -437,7 +441,7 @@ class LibraryPage extends StatefulWidget {
                                 builder: (context) => ReaderPage(
                                   bookId: book.id,
                                   bookTitle: book.title,
-                                  filePath: signedBookUrl, // Pass the signed URL
+                                  filePath: signedBookUrl!, // Corrected: Add null assertion operator as it's checked above
                                 ),
                               ),
                             );
