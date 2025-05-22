@@ -2,9 +2,16 @@ RewriteEngine On
 RewriteBase /
 RewriteRule ^index\.html$ - [L]                             # if requesting index.html directly, do nothing
 
+# Exclude server/ directory from SPA routing - both with and without leading slash
+RewriteCond %{REQUEST_URI} !^/server/ [NC]
+RewriteCond %{REQUEST_URI} !^server/ [NC]
+
+# Allow PHP files to be accessed directly
+RewriteCond %{REQUEST_FILENAME} !\.php$ [NC]
+
+# Standard SPA routing
 RewriteCond %{REQUEST_FILENAME} !-f                         # if the request is NOT a real file...
 RewriteCond %{REQUEST_FILENAME} !-d                         # and NOT a real directory...
-RewriteRule . /index.html [L,QSA]                             # ...then serve index.html
+RewriteRule . /index.html [L,QSA]                           # ...then serve index.html
 
 
-    

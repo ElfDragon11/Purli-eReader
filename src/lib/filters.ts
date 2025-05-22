@@ -3,7 +3,7 @@ import { supabase } from './supabase';
 import { PostgrestError } from '@supabase/supabase-js';
 
 const DEFAULT_FILTER: FilterContent = {
-  words: ['damn', 'damned', 'damning', 'hell', 'fuck', 'fucking', 'fucked', 'fucks', 'shit', 'shitting', 'shitted', 'shits', 'ass', 'asses', 'asshole', 'bitch', 'cock', 'penus', 'motherfuck', 'motherfucker', 'motherfucking', 'motherfuckers', ],
+  words: ['damn', 'damned', 'damning', 'hell', 'fuck', 'fucking', 'fucked', 'fucks', 'shit', 'shitting', 'shitted', 'shits', 'ass', 'asses', 'asshole', 'bitch', 'penus', 'pussy', 'vagina', 'clit', 'motherfuck', 'motherfucker', 'motherfucking', 'motherfuckers', ],
   phrases: [],
   sections: [],
 };

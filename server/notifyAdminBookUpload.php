@@ -24,7 +24,7 @@ $message .= "Uploader Email: " . $uploaderEmail . "\n\n";
 $message .= "Please review and provide scene filtering!";
 
 // Additional headers
-$headers = "From: bookUpload@purlibooks.com\r\n"; // Change this to a valid email address on your server
+$headers = "From: bookupload@purlibooks.com\r\n"; // Change this to a valid email address on your server
 $headers .= "Reply-To: " . $uploaderEmail . "\r\n";
 $headers .= "X-Mailer: PHP/" . phpversion();
 

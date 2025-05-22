@@ -62,6 +62,9 @@ const Navbar = () => {
               <Link to="/report" className="text-gray-700 hover:text-blue-600" onClick={() => setIsMobileMenuOpen(false)}>
                 Report
               </Link>
+              <Link to="/Info" className="text-gray-700 hover:text-blue-600" onClick={() => setIsMobileMenuOpen(false)}>
+                Info
+              </Link>
               {user && (
                 <>
                   <Link to="/profile" className="text-gray-700 hover:text-blue-600" onClick={() => setIsMobileMenuOpen(false)}>

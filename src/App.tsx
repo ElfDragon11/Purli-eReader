@@ -10,11 +10,11 @@ import Home from './pages/Home';
 import Auth from './pages/Auth';
 import CheckoutForm from './pages/Checkout';
 import Return from './pages/Return';
+import Info from './pages/Info';
 import { SubscriptionProvider } from './contexts/SubscriptionContext';
 import SubscriptionRequired from './components/SubscriptionRequired';
-
-
-
+import Admin from './admin/Admin';
+import { AuthProvider as AdminAuthProvider } from './admin/lib/auth';
 
 
 function App() {
@@ -40,8 +40,17 @@ function App() {
                 <Route path="/terms" element={<Terms />} />
                 <Route path="/checkout" element={<CheckoutForm />} />
                 <Route path="/return" element={<Return />} />
-                <Route path="/profile" element={<UserProfile />} />EpubReport
+                <Route path="/profile" element={<UserProfile />} />
+                <Route path="/info" element={<Info />} /> {/* <-- Add this route */}
                 <Route path="/report" element={<EpubReport />} />
+                <Route
+                  path="/admin/*"
+                  element={
+                    <AdminAuthProvider> {/* Corrected to use AdminAuthProvider */}
+                      <Admin />
+                    </AdminAuthProvider>
+                  }
+                />
                 <Route path="/*" element={<Home />} />
               </Routes>
             </main>
